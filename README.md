@@ -1,7 +1,7 @@
 # Microshell
 
 ## Overview
-Nano Shell is a simple command-line shell implemented in C. It supports basic shell commands, local variables, environment variable export, and I/O redirection.
+Micro Shell is a simple command-line shell implemented in C. It supports basic shell commands, local variables, environment variable export, and I/O redirection.
 
 ## Features
 - Execute system commands.
