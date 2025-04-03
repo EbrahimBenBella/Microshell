@@ -13,9 +13,9 @@ Nano Shell is a simple command-line shell implemented in C. It supports basic sh
   - `2>` for error redirection.
 
 ## Compilation
-To compile Nano Shell, use:
+To compile Micro Shell, use:
 ```bash
-gcc -o nanoshell nanoshell.c
+gcc -o microshell microshell.c
 ```
 
 ## Usage
