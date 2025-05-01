@@ -2,186 +2,293 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
 #include <sys/wait.h>
+#include <fcntl.h>
 
-#define MAX_INPUT 1024
+extern char **environ;
 
-typedef struct Variable {
+#define size 15000
+#define pwd 1000
+
+typedef struct {
     char *name;
     char *value;
-    struct Variable *next;
-} Variable;
+} ShellVar;
 
-Variable *head = NULL;
-
-
-void set_local_variable(char *name, char *value) {
-    Variable *temp = head;
-    while (temp) {
-        if (strcmp(temp->name, name) == 0) {
-            free(temp->value);
-            temp->value = strdup(value);
-            return;
-        }
-        temp = temp->next;
-    }
-    Variable *new_var = (Variable *)malloc(sizeof(Variable));
-    new_var->name = strdup(name);
-    new_var->value = strdup(value);
-    new_var->next = head;
-    head = new_var;
-}
-
-
-char *get_local_variable(char *name) {
-    Variable *temp = head;
-    while (temp) {
-        if (strcmp(temp->name, name) == 0)
-            return temp->value;
-        temp = temp->next;
-    }
-    return NULL;
-}
-
-
-void export_variable(char *name) {
-    char *value = get_local_variable(name);
-    if (value) {
-        setenv(name, value, 1);
-    } else {
-        printf("Variable %s not found\n", name);
-    }
-}
-
-
-void execute_command(char *input) {
-    char *args[MAX_INPUT / 2 + 1];
-    char *token;
-    int arg_count = 0;
-    char *input_file = NULL, *output_file = NULL, *error_file = NULL;
-    int in_fd, out_fd, err_fd;
-
-    token = strtok(input, " ");
-    while (token) {
-        if (strcmp(token, "<") == 0) {
-            token = strtok(NULL, " ");
-            input_file = token;
-        } else if (strcmp(token, ">") == 0) {
-            token = strtok(NULL, " ");
-            output_file = token;
-        } else if (strcmp(token, "2>") == 0) {
-            token = strtok(NULL, " ");
-            error_file = token;
-        } else {
-            args[arg_count++] = token;
-        }
-        token = strtok(NULL, " ");
-    }
-    args[arg_count] = NULL;
-
-    if (arg_count == 0) return;
-
-    if (strcmp(args[0], "exit") == 0) {
-        printf("Good Bye :)\n");
-        exit(0);
-    }
-
-    if (strcmp(args[0], "pwd") == 0) {
-        char cwd[1024];
-        if (getcwd(cwd, sizeof(cwd)) != NULL) {
-            printf("%s\n", cwd);
-        }
-        return;
-    }
-
-    if (strcmp(args[0], "cd") == 0) {
-        if (arg_count < 2) {
-            printf("cd: missing argument\n");
-            return;
-        }
-        if (chdir(args[1]) != 0) {
-            perror("cd failed");
-        }
-        return;
-    }
-
-    if (strcmp(args[0], "export") == 0) {
-        export_variable(args[1]);
-        return;
-    }
-
-    if (strcmp(args[0], "echo") == 0) {
-        for (int i = 1; i < arg_count; i++) {
-            if (args[i][0] == '$') {
-                char *value = get_local_variable(args[i] + 1);
-                printf("%s ", value ? value : "");
-            } else {
-                printf("%s ", args[i]);
-            }
-        }
-        printf("\n");
-        return;
-    }
-
-    char *equals = strchr(args[0], '=');
-    if (equals) {
-        *equals = '\0';
-        char *name = args[0];
-        char *value = equals + 1;
-        set_local_variable(name, value);
-        return;
-    }
-
-    pid_t pid = fork();
-    if (pid == 0) {
-        if (input_file) {
-            in_fd = open(input_file, O_RDONLY);
-            if (in_fd < 0) {
-                perror("Error opening input file");
-                exit(1);
-            }
-            dup2(in_fd, STDIN_FILENO);
-            close(in_fd);
-        }
-        if (output_file) {
-            out_fd = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (out_fd < 0) {
-                perror("Error opening output file");
-                exit(1);
-            }
-            dup2(out_fd, STDOUT_FILENO);
-            close(out_fd);
-        }
-        if (error_file) {
-            err_fd = open(error_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-            if (err_fd < 0) {
-                perror("Error opening error file");
-                exit(1);
-            }
-            dup2(err_fd, STDERR_FILENO);
-            close(err_fd);
-        }
-        execvp(args[0], args);
-        perror("Execution failed");
-        exit(1);
-    } else if (pid > 0) {
-        wait(NULL);
-    } else {
-        perror("Fork failed");
-    }
-}
-
-int main() {
-    char input[MAX_INPUT];
+int microshell_main(int argc, char *argv[]) {
+    char buf[size], pwdbuf[pwd];
+    ShellVar *variables = NULL;
+    int v = 0;
+    int last_status = 0;
 
     while (1) {
-        printf("Micro Shell Prompt > ");
-        if (fgets(input, MAX_INPUT, stdin) == NULL)
-            break;
-        input[strcspn(input, "\n")] = 0;
-        execute_command(input);
-    }
-    return 0;
-}
+        printf("FSP > ");
+        fflush(stdout);
 
+        if ((fgets(buf, size, stdin)) == NULL) {
+            for (int i = 0; i < v; i++) {
+                free(variables[i].name);
+                free(variables[i].value);
+            }
+            free(variables);
+            exit(last_status);
+        }
+
+        buf[strlen(buf) - 1] = 0;
+
+        if (strlen(buf) == 0)
+            continue;
+
+        char **c = NULL;
+        int j = 0;
+        int k = 0;
+        int buflen = strlen(buf);
+        char temp[buflen + 1];
+        memset(temp, 0, sizeof(temp));
+
+        for (int i = 0; i <= buflen; ++i) {
+            if (buf[i] != ' ' && buf[i] != '\0') {
+                temp[k++] = buf[i];
+            } else {
+                if (k > 0) {
+                    temp[k] = '\0';
+                    c = (char **) realloc(c, sizeof(char *) * (j + 1));
+                    c[j] = (char *) malloc(strlen(temp) + 1);
+                    strcpy(c[j], temp);
+                    j++;
+                    k = 0;
+                }
+            }
+        }
+
+        c = (char **) realloc(c, sizeof(char *) * (j + 1));
+        c[j] = NULL;
+
+        if (j == 0) {
+            free(c);
+            continue;
+        }
+
+        for (int i = 0; i < j; i++) {
+            char *dollar = strchr(c[i], '$');
+            if (dollar != NULL) {
+                char *varname = dollar + 1;
+                int found = 0;
+                for (int vi = 0; vi < v; vi++) {
+                    if (strcmp(variables[vi].name, varname) == 0) {
+                        size_t prefix_len = dollar - c[i];
+                        char newval[strlen(c[i]) + strlen(variables[vi].value)];
+                        strncpy(newval, c[i], prefix_len);
+                        newval[prefix_len] = '\0';
+                        strcat(newval, variables[vi].value);
+                        c[i] = (char*) realloc(c[i], strlen(newval) + 1);
+                        strcpy(c[i], newval);
+                        found = 1;
+                        break;
+                    }
+                }
+                if (!found) {
+                    *dollar = '\0';
+                }
+            }
+        }
+
+        
+        int std_in = dup(0), std_out = dup(1), std_err = dup(2);
+        int redir_error = 0;
+
+        for (int i = 0; i < j; i++) {
+            if (strcmp(c[i], "<") == 0) {
+                int in_fd = open(c[i+1], O_RDONLY);
+                if (in_fd < 0) {
+                    fprintf(stderr, "cannot access %s: No such file or directory\n", c[i + 1]);
+                    last_status = 1;
+                    redir_error = 1;
+                    break;
+                }
+                dup2(in_fd , 0);
+                close(in_fd);
+                free(c[i]);
+                free(c[i+1]);
+                for (int k = i; k + 2 <= j; ++k) {
+                    c[k] = c[k + 2];
+                }
+                j -= 2;
+                c[j] = NULL;
+                c[j + 1] = NULL; 
+                i--;
+            }
+            else if(strcmp(c[i], ">") == 0){
+                int out_fd = open(c[i+1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (out_fd < 0) {
+                    fprintf(stderr, "%s: Permission denied\n", c[i + 1]);
+                    last_status = 1;
+                    redir_error = 1;
+                    break;
+                }
+                dup2(out_fd , 1);
+                close(out_fd);
+                free(c[i]);
+                free(c[i+1]);
+                for (int k = i; k + 2 <= j; ++k) {
+                    c[k] = c[k + 2];
+                }
+                j -= 2;
+                c[j] = NULL;
+                c[j + 1] = NULL;  
+                i--;
+            }
+            else if(strcmp(c[i], "2>") == 0){
+                int err_fd = open(c[i+1], O_WRONLY | O_CREAT | O_TRUNC, 0644);
+                if (err_fd < 0) {
+                    fprintf(stderr, "cannot access %s: No such file or directory\n", c[i + 1]);
+                    last_status = 1;
+                    redir_error = 1;
+                    break;
+                }
+                dup2(err_fd , 2);
+                close(err_fd);
+                free(c[i]);
+                free(c[i+1]);
+                for (int k = i; k + 2 <= j; ++k) {
+                    c[k] = c[k + 2];
+                }
+                j -= 2;
+                c[j] = NULL;
+                c[j + 1] = NULL;
+                i--;
+            }
+        }
+
+        if (redir_error) {
+            dup2(std_in, 0);
+            dup2(std_out, 1);
+            dup2(std_err, 2);
+            close(std_in);
+            close(std_out);
+            close(std_err);
+            for (int i = 0; i < j; i++) free(c[i]);
+            free(c);
+            continue;
+        }
+
+        if(strchr(c[0],'=') != NULL){
+            for(int i=0;c[0][i] !=0;++i){
+                if(c[0][i] =='=' && c[0][i-1] !=' ' && c[0][i+1] !=' ' && (j == 1 || c[1][0] ==0)) {
+                    c[0][i] = '\0';
+                    char *name = c[0];
+                    char *value = c[0] + i + 1;
+
+                    int found = 0;
+                    for (int vi = 0; vi < v; vi++) {
+                        if (strcmp(variables[vi].name, name) == 0) {
+                            free(variables[vi].value);
+                            variables[vi].value = strdup(value);
+                            found = 1;
+                            break;
+                        }
+                    }
+
+                    if (!found) {
+                        variables = (ShellVar *) realloc(variables, sizeof(ShellVar) * (v + 1));
+                        variables[v].name = strdup(name);
+                        variables[v].value = strdup(value);
+                        v++;
+                    }
+                    last_status = 0;
+                    break;
+                }
+                else if(c[0][i] =='=') {
+                    printf("Invalid command\n");
+                    last_status = 1;
+                    break;
+                }
+            }
+            for (int i = 0; i < j; i++) free(c[i]);
+            free(c);
+            continue;
+        }
+        else if ((strcmp(c[0], "exit")) == 0) {
+            printf("Good Bye\n");
+            for (int i = 0; i < j; i++)
+                free(c[i]);
+            free(c);
+            for (int i = 0; i < v; i++) {
+                free(variables[i].name);
+                free(variables[i].value);
+            }
+            free(variables);
+            return last_status;
+        }
+        else if ((strcmp(c[0], "pwd")) == 0) {
+            if (getcwd(pwdbuf, pwd) == NULL) {
+                for (int i = 0; i < j; i++)
+                    free(c[i]);
+                free(c);
+                last_status = 1;
+            } else {
+                printf("%s\n", pwdbuf);
+                last_status = 0;
+            }
+        }
+        else if ((strcmp(c[0], "cd")) == 0) {
+            if (chdir(c[1]) == -1) {
+                printf("cd: %s: No such file or directory\n", c[1]);
+                last_status = 1;
+            } else {
+                last_status = 0;
+            }
+        }
+        else if ((strcmp(c[0], "echo")) == 0) {
+            for (int i = 1; i < j; i++) {
+                printf("%s", c[i]);
+                if (i < j - 1)
+                    printf(" ");
+            }
+            printf("\n");
+            last_status = 0;
+        }
+        else if ((strcmp(c[0], "export")) == 0) {
+            int found = 0;
+            for (int vi = 0; vi < v; vi++) {
+                if (strcmp(variables[vi].name, c[1]) == 0) {
+                    setenv(variables[vi].name, variables[vi].value, 1);
+                    last_status = 0;
+                    found = 1;
+                    break;
+                }
+            }
+            if (!found) last_status = 1;
+        }
+        else {
+            pid_t pid = fork();
+            if (pid > 0) {
+                int wstatus;
+                wait(&wstatus);
+                if (WIFEXITED(wstatus)) {
+                    last_status = WEXITSTATUS(wstatus);
+                } else {
+                    last_status = 1;
+                }
+            }
+            else if (pid == 0) {
+                execvp(c[0], c);
+                fprintf(stderr,"%s: command not found\n", c[0]);
+                exit(127);
+            }
+        }
+
+        
+        dup2(std_in, 0);
+        dup2(std_out, 1);
+        dup2(std_err, 2);
+        close(std_in);
+        close(std_out);
+        close(std_err);
+
+        for (int i = 0; i < j; i++) free(c[i]);
+        free(c);
+    }
+
+    return last_status;
+}
